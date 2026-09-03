@@ -1,0 +1,16 @@
+Metadata-Version: 2.1
+Name: fx-quantlab
+Version: 0.1.0
+Summary: FX QuantLab: Pricing, Risk & Analytics Platform
+Requires-Python: ==3.12.*
+Requires-Dist: yfinance==0.2.61
+Requires-Dist: fredapi==0.5.2
+Requires-Dist: pandas==2.1.4
+Requires-Dist: numpy==1.26.4
+Requires-Dist: python-dotenv==1.1.1
+Requires-Dist: scipy==1.11.4
+Requires-Dist: fastapi==0.115.6
+Requires-Dist: uvicorn==0.32.1
+Requires-Dist: pydantic==2.10.3
+Provides-Extra: dev
+Requires-Dist: pytest==9.1.1; extra == "dev"
