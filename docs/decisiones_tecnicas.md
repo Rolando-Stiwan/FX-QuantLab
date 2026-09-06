@@ -4,6 +4,22 @@ Documento de gobernanza técnica. Registra decisiones metodológicas
 conscientes, sus razones, y las limitaciones honestas que implican.
 Sigue el mismo estilo de documentación que HealthRisk360.
 
+## 0. Usuario objetivo y alcance
+
+La plataforma está diseñada como herramienta interna de apoyo a la decisión
+para el BANCO (un gestor de mercados/tesorería), no para el cliente final.
+El cliente solo comunica una necesidad de cobertura (ej. "necesito proteger
+un pago de 5M EUR en 90 días"); es el banco quien usa esta plataforma
+internamente para evaluar si ofrece la cobertura, con qué precio de
+referencia, y qué riesgo asume al hacerlo.
+
+Consecuencia directa de este alcance: el precio que calcula la plataforma
+es un PRECIO DE REFERENCIA de modelo (basado en volatilidad histórica, no
+en una superficie de volatilidad de mercado real), no una cotización
+ejecutable que un cliente pueda tomar y operar directamente. Esta
+distinción se mantiene explícita para evitar que el proyecto se lea como
+un motor de pricing de mesa real.
+
 ## 1. Fuentes de datos
 
 Todas las fuentes son 100% gratuitas — decisión consciente para un
@@ -240,3 +256,99 @@ al efecto de la volatilidad cuando la opción está muy OTM.
 exactamente el precio ya validado en Módulo 2 (0.001793 con los
 inputs del caso de prueba estándar), confirmando que la capa de
 escenarios no introduce desviación alguna sobre el pricer original.
+
+---
+
+## Módulo 5 — Dashboard (Streamlit)
+
+Consume la API (Módulo 6) vía `requests`, sin acceso directo a la base de
+datos ni a los módulos de cálculo — mantiene la separación de capas ya
+establecida en el proyecto.
+
+**Estructura**: 4 páginas — Resumen (inputs, precio, Greeks, VaR/CVaR bajo
+demanda), Mercado (histórico de spot/volatilidad), Simulación
+(distribución Monte Carlo de P&L y tabla de escenarios), Sensibilidad
+(curvas de precio vs. strike/volatilidad/tiempo).
+
+**VaR/CVaR bajo demanda, no automático**: dado el costo de recalcular
+Monte Carlo (ver nota de performance en Módulo 3), el dashboard solo lo
+calcula cuando el usuario lo pide explícitamente con un botón — no en cada
+cambio de un input, a diferencia de precio y Greeks (fórmulas cerradas,
+instantáneas).
+
+**Guía de uso integrada**: tooltips y un expander explicativo en la
+página de Resumen, pensados para que alguien sin trasfondo financiero
+(ej. un reclutador) entienda qué significa cada input y cada métrica sin
+contexto previo.
+
+---
+
+## Módulo 6 — API (FastAPI)
+
+Capa delgada sin lógica de cálculo propia — expone los módulos ya
+validados (pricing, riesgo, escenarios, datos de mercado) vía HTTP, para
+que el dashboard (y potencialmente otros consumidores) no necesiten
+importar directamente el código Python del proyecto.
+
+**Diseño de modelos (models.py)**: un solo `PricingRequest` base
+reutilizado en /price, /greeks, /var, /simulate — evita duplicar
+validación de los mismos 7 campos en cuatro lugares. `VarRequest` extiende
+`PricingRequest` solo con los parámetros específicos de riesgo
+(horizon_days, n_simulations, confidence, seed).
+
+**Decisión de límite de simulaciones**: `n_simulations` default bajo
+(10,000, no 50,000) y máximo de 100,000, por límite de memoria observado
+en entornos de despliegue con recursos acotados (lección de HealthRisk360
+con Streamlit Cloud).
+
+**Endpoints de solo lectura de mercado** (/market-data,
+/market-data/history) no ejecutan ningún cálculo — son un SELECT directo
+sobre el snapshot más reciente guardado por el pipeline diario (Módulo 1).
+
+**Validación**: tests/test_api.py (pytest + TestClient de FastAPI, sin
+levantar un servidor real) — 10 tests que confirman que la capa de API no
+introduce desviación sobre los resultados ya validados en Módulo 2/3/4
+(precio de referencia, relación CVaR≥VaR, comportamiento de "Flight to
+quality"), más casos de entrada inválida (422 en tenor/volatilidad
+negativos).
+
+## Módulo 7 — Contenedorización y despliegue (Docker + Render)
+
+**Arquitectura de un solo contenedor**: API y dashboard corren dentro del
+mismo contenedor Docker, en vez de como dos servicios separados. Decisión
+consciente de simplicidad operativa, replicando el mismo patrón usado en
+HealthRisk360 — evita la complejidad adicional (y el costo, en el plan
+gratuito de Render) de orquestar dos servicios independientes cuando el
+proyecto no lo requiere a esta escala.
+
+**Arranque de dos procesos** (start.sh): uvicorn (API) se lanza en
+background y escucha únicamente en `127.0.0.1` — no debe ser accesible
+desde fuera del contenedor, porque el dashboard le habla internamente.
+Streamlit (dashboard) se lanza en foreground y escucha en `0.0.0.0` sobre
+el puerto que Render asigna dinámicamente vía la variable `$PORT` —  es el
+único proceso expuesto públicamente. Mantener uvicorn únicamente en
+`127.0.0.1` fue una corrección necesaria: exponerlo también en `0.0.0.0`
+hacía que Render detectara dos puertos abiertos y enrutara el tráfico
+público de forma inconsistente entre ambos procesos.
+
+**Datos horneados en la imagen**: el archivo SQLite (`data/*.db`) se copia
+dentro de la imagen en tiempo de build, no se monta como volumen externo.
+Esto mantiene el despliegue simple (sin necesidad de sincronización aparte
+del contenedor), a cambio de que los datos solo se actualizan en un
+redeploy — lo cual ocurre automáticamente cada día, porque el cron diario
+(Módulo 1) hace push del `.db` actualizado a `main`, y Render tiene
+autoDeploy activado sobre esa rama.
+
+**CI separado del pipeline de datos**: el cron diario
+(`daily_pipeline.yml`) y los tests automatizados (`ci.yml`) son workflows
+de GitHub Actions independientes — el primero actualiza datos, el segundo
+valida código en cada push/PR a `main`. Mantenerlos separados evita que un
+fallo de red al descargar datos de mercado bloquee la validación de
+código, y viceversa.
+
+**Gestión de dependencias de desarrollo**: `pytest` y `httpx` se declararon
+en `[project.optional-dependencies] dev`, no en las dependencias
+principales — no son necesarias para que la aplicación corra en
+producción, solo para testear. El CI instala explícitamente con
+`pip install -e ".[dev]"`.
+
