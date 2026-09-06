@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar dependencias
-        run: pip install -e .
+        run: pip install -e ".[dev]"
 
       - name: Correr tests
         run: pytest -v
