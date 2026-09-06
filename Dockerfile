@@ -12,6 +12,4 @@ COPY start.sh .
 RUN sed -i 's/\r$//' start.sh
 RUN chmod +x start.sh
 
-EXPOSE 8000
-
 CMD ["./start.sh"]

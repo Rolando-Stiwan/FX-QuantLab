@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# API corre solo internamente, puerto fijo 8000
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000 &
+# API interna solamente — no debe ser visible desde fuera del contenedor
+uvicorn src.api.main:app --host 127.0.0.1 --port 8000 &
 
-# Dashboard escucha en el puerto que Render asigna via $PORT
+# Dashboard es el único punto público, escucha en el puerto que Render asigna
 streamlit run src/dashboard/app.py --server.port ${PORT:-8501} --server.address 0.0.0.0
